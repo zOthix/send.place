@@ -1,0 +1,9 @@
+---
+import MainLayout from "@/layouts/main-layout.astro";
+import WrappedApp from "@/web3/wrapped-app";
+import App from "@/web3/app";
+---
+
+<MainLayout title="">
+  <WrappedApp client:only="react" />
+</MainLayout>

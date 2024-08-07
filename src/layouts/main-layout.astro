@@ -1,0 +1,38 @@
+---
+import { WagmiProvider, serialize, deserialize } from "wagmi";
+import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
+import { QueryClient } from "@tanstack/react-query";
+import { cn } from "@/lib/utils";
+import { Web3Provider } from "@/web3/provider";
+import BaseLayout from "./base-layout.astro";
+
+type Props = {
+  title: string;
+  description?: string;
+  mainClass?: string;
+};
+
+const { title, description, mainClass } = Astro.props;
+
+// const queryClient = new QueryClient({
+//   defaultOptions: {
+//     queries: {
+//       gcTime: 1_000 * 60 * 60 * 24, // 24 hours
+//     },
+//   },
+// });
+
+// const persister = createSyncStoragePersister({
+//   serialize,
+//   storage: typeof window !== "undefined" ? window.localStorage : undefined,
+//   deserialize,
+// });
+---
+
+<BaseLayout title={title} description={description}>
+  <main class={cn(mainClass)}>
+    <Web3Provider client:only="react">
+      <slot />
+    </Web3Provider>
+  </main>
+</BaseLayout>
