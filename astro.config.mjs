@@ -10,7 +10,7 @@ import svgr from "vite-plugin-svgr";
 
 // https://astro.build/config
 export default defineConfig({
-  site: "https://send-play.vercel.app",
+  site: "https://send.play",
   integrations: [
     mdx({
       syntaxHighlight: "shiki",
