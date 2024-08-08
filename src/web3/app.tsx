@@ -282,7 +282,7 @@ export default function App() {
   }, []);
 
   React.useEffect(() => {
-    if (balanceError?.message) {
+    if (address && balanceError?.message) {
       toast.error(
         "Error getting balance for: " +
           shortenAddress((balanceError as any)?.contractAddress)
