@@ -371,7 +371,13 @@ export default function App() {
               </Button>
             ) : null} */}
             {account.status === "connected" ? (
-              <w3m-account-button />
+              chainName ? (<w3m-account-button />) : <p>
+                <button className="bg-blue-600 py-2 px-4 rounded-full" onClick={()=>{
+                  open({
+                    view: "Networks"
+                  })
+                }}>Chain not supported</button>
+              </p>
             ) : (
               <w3m-connect-button />
             )}
