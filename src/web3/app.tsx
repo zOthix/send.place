@@ -17,6 +17,12 @@ import { useWeb3Modal } from "@web3modal/wagmi/react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
+import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import {
+  createTransferInstruction,
+  getOrCreateAssociatedTokenAccount,
+  TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
 // import Blockies from 'react-blockies';
 
 import {
@@ -39,6 +45,32 @@ import disperseAbi from "./disperse-abi";
 // import { chains, type ChainIds, SUPER_LUMIO_CHAIN_ID } from "./config";
 import { siteConfig } from "@/config/site";
 import { formatBalance } from "./format-balance";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogHeader,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import "@solana/wallet-adapter-react-ui/styles.css";
+import {
+  clusterApiUrl,
+  Connection,
+  Keypair,
+  PublicKey,
+  SystemProgram,
+  Transaction,
+  type AccountMeta,
+  type ConfirmOptions,
+} from "@solana/web3.js";
+import { useAnchorWallet, useWallet } from "@solana/wallet-adapter-react";
+import * as anchor from "@project-serum/anchor";
+import type { XpBridge } from "../web3/solana_idl";
+import idl from "../web3/idl.json";
+import { MyWallet } from "@/lib/MyWallet";
+import useSolanaBalance from "@/hooks/use-solana-balance";
+import { TransferLamportsData, TransferLamportsDataInfo } from "./encode";
+import { sendSplToken } from "@/solana/utils";
 
 const formSchema = z.object({
   type: z.enum(["native", "erc20"]),
@@ -210,27 +242,14 @@ const useDisperse = ({
   };
 };
 
-function parseInput(inputStrings: string[]): [Address, string][] {
-  // Initialize an empty array to store the parsed output
-  const parsedOutput: [Address, string][] = [];
+function parseInput(inputStrings: string[]): [string, string][] {
+  // Parse the input strings
+  const parsedOutput = inputStrings.map((inputString) => {
+    // Split the input string by the first space character
+    const [address, value] = inputString.split(/[ ,=]+/);
 
-  // Define a regular expression pattern to match the different formats
-  const pattern = /([0-9a-fA-Fx]+)[\s,=]+([\d\.]+)/g;
-
-  // Iterate over each input string
-  inputStrings.forEach((inputStr) => {
-    // Find all matches in the input string based on the defined pattern
-    const matches = inputStr.matchAll(pattern);
-
-    // Iterate over each match
-    for (const match of matches) {
-      // Extract address and amount from the match
-      const address = match[1];
-      const amount = match[2];
-
-      // Append the parsed address and amount to the output array
-      parsedOutput.push([address as Address, amount]);
-    }
+    // Return the address and value as a tuple
+    return [address, value] as [string, string];
   });
 
   // Return the parsed output as a 2D array
@@ -242,14 +261,16 @@ const shortenAddress = (address: string) =>
 
 export default function App() {
   const account = useAccount();
+  const orignalWallet = useAnchorWallet();
+  const { sendTransaction, publicKey, connected } = useWallet();
   const { switchChainAsync } = useSwitchChain();
   const { open } = useWeb3Modal();
   const address = account.address ? shortenAddress(account.address) : "";
   const accountText = address ? `Account (${address})` : "Account";
   const chainName = account.chain?.name ? account.chain.name : "";
-  const tokens = account.chain?.tokens;
+  const tokens = (account.chain as any)?.tokens;
 
-  const disperceAddress = account.chain?.contracts?.disperse?.address;
+  const disperceAddress = (account.chain?.contracts?.disperse as any)?.address;
 
   const form = useForm({
     resolver: zodResolver(formSchema),
@@ -264,7 +285,6 @@ export default function App() {
   const token = form.watch("token") as Address;
   const rawBody = form.watch("recipients");
   const rawRecipients = rawBody ? parseInput(rawBody.split("\n")) : [];
-
   const {
     data: balance,
     isError,
@@ -276,11 +296,12 @@ export default function App() {
     token: type === "erc20" && token ? (token as Address) : undefined,
   });
 
+  const solBalance = useSolanaBalance();
+
   React.useEffect(() => {
     const timer = setInterval(() => refechBalance(), 1000);
-    return () => clearInterval(timer);
+    return () => clearInterval(timer as any);
   }, []);
-
   React.useEffect(() => {
     if (address && balanceError?.message) {
       toast.error(
@@ -291,9 +312,6 @@ export default function App() {
   }, [balanceError]);
 
   const decimals = balance?.decimals ?? 18;
-  const formattedBalance = balance?.value
-    ? formatBalance(balance?.value, balance.decimals)
-    : "0";
 
   // TODO: calc sum of transfers
   const maxAllowance = balance?.value ? balance?.value : undefined;
@@ -301,7 +319,7 @@ export default function App() {
     ? formatUnits(maxAllowance, decimals)
     : "0";
 
-  const recipients = [] as Address[];
+  const recipients = [] as string[];
   const values = [] as bigint[];
 
   rawRecipients.forEach(([recipient, value]) => {
@@ -311,7 +329,6 @@ export default function App() {
 
   const total = values.reduce((acc, val) => acc + val, 0n);
   const formattedTotal = total ? formatBalance(total, decimals) : "0";
-
   const {
     allowance,
     isApprovePending,
@@ -328,7 +345,7 @@ export default function App() {
     useDisperse({
       address: disperceAddress!,
       token,
-      recipients,
+      recipients: recipients as Address[],
       values,
       onDisperse(tx) {
         console.log("disperse onDisperse", tx);
@@ -348,8 +365,374 @@ export default function App() {
     return false;
   });
 
-  const isConnected = account.status === "connected";
+  const isConnected: Boolean = account.status === "connected" || connected;
 
+  /// ---------------------------------------------------
+  /**
+   * Send lamports to the program
+   * ----------------------------------------------------
+   */
+
+  //  const orignalWallet = useAnchorWallet();
+  const connection = new Connection(clusterApiUrl("devnet"), {
+    commitment: "confirmed",
+  });
+  const sendLamports = async () => {
+    const reciepients = rawRecipients.map(([rec, val]) => {
+      return {
+        amount: Number(val),
+        publicKey: rec,
+      };
+    });
+
+    const storedTo = localStorage.getItem("to");
+    console.log("storedTo", storedTo);
+
+    const to: Keypair = storedTo
+      ? Keypair.fromSecretKey(
+          Buffer.from(storedTo.split(",").map((s) => parseInt(s)))
+        )
+      : Keypair.generate();
+
+    if (!storedTo) {
+      localStorage.setItem("to", to.secretKey.toString());
+    }
+
+    const lamportsNeeded = reciepients.reduce(
+      (acc, r) => acc + r.amount * 1e9,
+      0
+    );
+
+    const transaction = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: publicKey!,
+        toPubkey: to.publicKey,
+        lamports: lamportsNeeded,
+      })
+    );
+
+    const signature = await sendTransaction(transaction, connection);
+    console.log("SIGNATURE", signature);
+    console.log("SIGNATURE--------------------------------");
+
+    await processRecipients(to, reciepients);
+  };
+  async function processRecipients(
+    to: Keypair,
+    reciepients: { publicKey: string; amount: number }[]
+  ) {
+    if (reciepients.length === 0) {
+      return;
+    }
+
+    const batch = reciepients.slice(0, 20);
+    const remaining = reciepients.slice(20);
+
+    await sendLamportsToUsers(to, batch);
+    await processRecipients(to, remaining);
+  }
+
+  async function sendLamportsToUsers(
+    to: Keypair,
+    reciepients: { publicKey: string; amount: number }[]
+  ) {
+    console.log(reciepients.length);
+    const payer = Keypair.fromSecretKey(to.secretKey);
+    const newWallet = new MyWallet(payer);
+
+    const provider = new anchor.AnchorProvider(connection, newWallet, {
+      commitment: "confirmed",
+    });
+
+    console.log("running sendLamports");
+    const program = new anchor.Program(
+      idl as anchor.Idl,
+      idl.metadata.address,
+      provider
+    ) as anchor.Program<XpBridge>;
+
+    const d = reciepients.map((r) => {
+      console.log(r);
+      return {
+        recipient: new PublicKey(r.publicKey),
+        amount: new anchor.BN(r.amount * 1e9),
+      };
+    });
+
+    let data = {
+      recipients: d,
+    };
+
+    let remainingAccounts: AccountMeta[] = [];
+    remainingAccounts.push({
+      isSigner: true,
+      isWritable: true,
+      pubkey: newWallet?.publicKey!,
+    });
+    remainingAccounts.push({
+      isSigner: false,
+      isWritable: true,
+      pubkey: SystemProgram.programId,
+    });
+
+    const d_ = reciepients.map((r) => {
+      return {
+        isSigner: false,
+        isWritable: true,
+        pubkey: new PublicKey(r.publicKey),
+      };
+    });
+
+    remainingAccounts.push(...d_);
+
+    const tx = program.methods
+      .transferLamports(data)
+      .accounts({
+        systemProgram: SystemProgram.programId,
+      })
+      .remainingAccounts(remainingAccounts);
+
+    await tx
+      .rpc({
+        skipPreflight: true,
+      })
+      .then((sig) => {
+        toast.success(
+          <>
+            Disperse successful.{" "}
+            <a
+              href={"https://explorer.solana.com/" + "/tx/" + sig}
+              target="_blank"
+            >
+              View on Solana
+            </a>
+          </>
+        );
+        console.log("result", sig);
+      })
+      .catch((err) => {
+        console.log(err);
+
+        toast.error("SomeThing Went wrong");
+      });
+  }
+
+  // ------------------------------------------------------
+  const sendSplToken_ = async () => {
+    console.log("running sendSplToken");
+
+    const splToken = new PublicKey(form.getValues("token"));
+    const reciepients = rawRecipients.map(([rec, val]) => {
+      return {
+        amount: Number(val),
+        publicKey: rec,
+      };
+    });
+    try {
+      // Step 1: Generate a new Keypair
+      const storedTo = localStorage.getItem("to");
+
+      const generatedKeyPair: Keypair = storedTo
+        ? Keypair.fromSecretKey(
+            Buffer.from(storedTo.split(",").map((s) => parseInt(s)))
+          )
+        : Keypair.generate();
+
+      if (!storedTo) {
+        localStorage.setItem("to", generatedKeyPair.secretKey.toString());
+      }
+
+      const generatedWallet = new MyWallet(generatedKeyPair);
+
+      // Step 2: Create transaction to send 1 SOL and SPL tokens to the new Keypair
+      const sendSolTx = SystemProgram.transfer({
+        fromPubkey: orignalWallet?.publicKey!,
+        toPubkey: generatedKeyPair.publicKey,
+        lamports: 1e8, // 1 SOL
+      });
+
+      const ConfirmOptions_: ConfirmOptions = {
+        skipPreflight: false, // You might want to enable preflight checks
+        commitment: "finalized",
+        preflightCommitment: "finalized",
+        maxRetries: 5,
+        minContextSlot: 10,
+      };
+
+      const x = await sendTransaction(
+        new Transaction().add(sendSolTx),
+        connection,
+        ConfirmOptions_
+      );
+
+      const bh = await connection.getLatestBlockhash();
+      const u = await connection.confirmTransaction(
+        {
+          blockhash: bh.blockhash,
+          lastValidBlockHeight: bh.lastValidBlockHeight,
+          signature: x,
+        },
+        "finalized"
+      );
+      console.log({ u });
+
+      let bal = 0;
+
+      while (!bal) {
+        bal = await connection.getBalance(generatedKeyPair.publicKey);
+        console.log({ bal });
+        await new Promise((res) => setTimeout(res, 1000));
+      }
+      const sourceAccount = await getOrCreateAssociatedTokenAccount(
+        connection,
+        generatedWallet.payer,
+        splToken,
+        orignalWallet?.publicKey! // mintTo public key
+      );
+
+      const destinationAccount = await getOrCreateAssociatedTokenAccount(
+        connection,
+        generatedWallet.payer,
+        splToken,
+        generatedKeyPair.publicKey // mintTo public key
+      );
+
+      const splTokenAmount =
+        reciepients.reduce((acc, r) => acc + r.amount, 0) * 1e9;
+
+      console.log({ reciepients, splTokenAmount });
+      const sendSplTx = createTransferInstruction(
+        sourceAccount.address,
+        destinationAccount.address,
+        orignalWallet?.publicKey!,
+        splTokenAmount
+      );
+      const sigSendSpl = await sendTransaction(
+        new Transaction().add(sendSplTx),
+        connection
+      );
+
+      // Send SOL and SPL tokens to the new Keypair
+
+      console.log("Sent 1 SOL and SPL tokens to new Keypair --> ", sigSendSpl);
+
+      processSPLRecipients(reciepients, generatedKeyPair, splToken);
+    } catch (e) {
+      console.log(e, "Error");
+    }
+  };
+
+  async function processSPLRecipients(
+    reciepients: { publicKey: string; amount: number }[],
+    payer: Keypair,
+    splToken: PublicKey
+  ) {
+    if (reciepients.length === 0) {
+      return;
+    }
+
+    const batch = reciepients.slice(0, 20);
+    const remaining = reciepients.slice(20);
+
+    await transferSPl(batch, payer, splToken);
+    await processSPLRecipients(remaining, payer, splToken);
+  }
+
+  async function transferSPl(
+    reciepients: { publicKey: string; amount: number }[],
+    payer: Keypair,
+    splToken: PublicKey
+  ) {
+    const generatedWallet = new MyWallet(payer);
+    const generatedKeyPair = generatedWallet.payer;
+
+    const newAccountProvider = new anchor.AnchorProvider(
+      connection,
+      new MyWallet(generatedKeyPair),
+      { commitment: "confirmed" }
+    );
+
+    const newAccountProgram = new anchor.Program(
+      idl as anchor.Idl,
+      idl.metadata.address,
+      newAccountProvider
+    ) as anchor.Program<XpBridge>;
+
+    let dataArray: TransferLamportsDataInfo[] = [];
+    const fromAccountAta = await getOrCreateAssociatedTokenAccount(
+      connection,
+      generatedWallet.payer,
+      splToken,
+      generatedWallet.payer.publicKey // mintTo public key
+    );
+    let remainingAccounts: AccountMeta[] = [
+      {
+        isSigner: true,
+        isWritable: true,
+        pubkey: generatedKeyPair.publicKey,
+      },
+      {
+        isSigner: false,
+        isWritable: true,
+        pubkey: fromAccountAta.address,
+      },
+      {
+        isSigner: false,
+        isWritable: true,
+        pubkey: splToken,
+      },
+    ];
+
+    for (const recipient of reciepients) {
+      const mintToTokenAccount = await getOrCreateAssociatedTokenAccount(
+        connection,
+        generatedKeyPair,
+        splToken,
+        new PublicKey(recipient.publicKey) // mintTo public key
+      );
+
+      let transferData = new TransferLamportsDataInfo({
+        recipient: mintToTokenAccount.address,
+        amount: new anchor.BN(recipient.amount * 1e9),
+      });
+
+      dataArray.push(transferData);
+
+      remainingAccounts.push({
+        isSigner: false,
+        isWritable: true,
+        pubkey: mintToTokenAccount.address,
+      });
+    }
+
+    let data = new TransferLamportsData({
+      recipients: dataArray,
+    });
+
+    const tx = newAccountProgram.methods
+      .transferSplTokens(data)
+      .accounts({
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .remainingAccounts(remainingAccounts);
+
+    console.log("data", data);
+    console.log("remainingAccounts", remainingAccounts);
+    console.log("splToken", splToken);
+    console.log("TOKEN_PROGRAM_ID", TOKEN_PROGRAM_ID);
+    const sig = await tx.rpc({
+      skipPreflight: true,
+    });
+
+    ({
+      skipPreflight: true,
+    });
+
+    console.log("asd", sig);
+    console.log("result", sig);
+  }
+
+  /// ---------------------------------------------------
   return (
     <>
       <header className="sticky top-0 z-40 border-b bg-background">
@@ -359,28 +742,62 @@ export default function App() {
             <span className="font-bold sm:inline-block">{siteConfig.name}</span>
           </a>
           <div className="flex items-center space-x-4">
-            {/* {account.status === "connected" && chainName !== "SuperLumio" ? (
-              <Button
-                rounded="full"
-                className="bg-gradient-to-r"
-                onClick={() =>
-                  switchChainAsync({ chainId: SUPER_LUMIO_CHAIN_ID })
-                }
-              >
-                Try Lumio
-              </Button>
-            ) : null} */}
-            {account.status === "connected" ? (
-              chainName ? (<w3m-account-button />) : <p>
-                <button className="bg-blue-600 py-2 px-4 rounded-full" onClick={()=>{
-                  open({
-                    view: "Networks"
-                  })
-                }}>Chain not supported</button>
-              </p>
-            ) : (
-              <w3m-connect-button />
-            )}
+            {/* {connected ? (
+              <WalletMultiButton
+                style={{
+                  background: "#1e1e1e",
+                  borderRadius: "9999px",
+                  padding: "1rem",
+                  height: "2.5rem",
+                }}
+              />
+            ) : account.status === "connected" ? (
+              chainName ? (
+                <w3m-account-button />
+              ) : (
+                <button
+                  onClick={() => {
+                    open({
+                      view: "Networks",
+                    });
+                  }}
+                  className="bg-blue-600 py-2 px-4 rounded-full"
+                >
+                  Chain not supported
+                </button>
+              )
+            ) : ( */}
+            <Dialog>
+              <DialogTrigger>
+                {/* <Button>Choose Chain</Button> */}
+
+                <Button className="bg-blue-600 py-2 px-4 rounded-full text-white">
+                  {" "}
+                  Choose Wallet{connected}as
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>Choose Chain To Connect</DialogHeader>
+
+                <div className="flex items-center justify-center gap-10">
+                  <w3m-connect-button label="Connect EVM" />
+                  <DialogClose>
+                    <WalletMultiButton
+                      style={{
+                        background: "#3396FF",
+                        borderRadius: "9999px",
+                        padding: "1rem",
+                        height: "2.5rem",
+                      }}
+                      onClick={() => {}}
+                    >
+                      Connect Solana
+                    </WalletMultiButton>
+                  </DialogClose>
+                </div>
+              </DialogContent>
+            </Dialog>
+            {/* )} */}
           </div>
         </div>
       </header>
@@ -469,15 +886,28 @@ export default function App() {
                   (balance?.value ? (
                     <span>
                       <span className="font-medium">Balance</span>:{" "}
-                      {formattedBalance} {balance?.symbol}
+                      {connected
+                        ? solBalance
+                        : balance?.value
+                        ? formatBalance(balance?.value, decimals)
+                        : "0"}{" "}
+                      {balance?.symbol}
                     </span>
                   ) : null)}
                 {type === "erc20" && (
                   <div className="flex flex-col gap-2">
                     <span className="whitespace-nowrap">
                       <span className="font-medium">Balance</span>:{" "}
-                      {balance?.value ? formattedBalance : "0"}
-                      {balance?.symbol ? " " + balance?.symbol : ""}
+                      {connected
+                        ? solBalance
+                        : balance?.value
+                        ? formatBalance(balance?.value, decimals)
+                        : "0"}{" "}
+                      {connected
+                        ? "sol"
+                        : balance?.symbol
+                        ? " " + balance?.symbol
+                        : ""}
                     </span>
                     <span className="whitespace-nowrap flex gap-2 items-center">
                       <span className="font-medium">Allowance</span>:{" "}
@@ -535,17 +965,20 @@ export default function App() {
               />
               {isConnected && type === "erc20" && (
                 <>
-                  {canDisperse ? (
+                  {canDisperse || connected ? (
                     <div className="flex gap-2 items-center">
                       <Button
                         type="submit"
-                        onClick={() => disperseTokenAsync()}
-                        disabled={
-                          isApprovePending ||
-                          isAllowanceLoading ||
-                          !token ||
-                          allowance === undefined
-                        }
+                        onClick={() => {
+                          console.log("disperseTokenAsync", chainName);
+                          connected ? sendSplToken(orignalWallet!, sendTransaction, form) : disperseTokenAsync();
+                        }}
+                        disabled={false}
+                        //   // isApprovePending ||
+                        //   // isAllowanceLoading ||
+                        //   // !token ||
+                        //   // allowance === undefined || !connected
+                        // }
                       >
                         Disperse
                       </Button>
@@ -555,10 +988,12 @@ export default function App() {
                     </div>
                   ) : (
                     <div className="flex gap-2 items-center">
-                      {/* <Button type="submit" disabled>Disperse</Button>
+                      <Button type="submit" disabled>
+                        Disperse
+                      </Button>
                       <span className="text-[13px] text-muted-foreground">
                         Total: {formattedTotal} {balance?.symbol}
-                      </span> */}
+                      </span>
                       <Button
                         type="button"
                         onClick={() => approveAllowanceAsync(total)}
@@ -583,11 +1018,18 @@ export default function App() {
               )}
               {isConnected && type === "native" && (
                 <div className="flex gap-2 items-center">
-                  <Button type="submit" onClick={() => disperseEtherAsync()}>
+                  <Button
+                    type="submit"
+                    onClick={() => {
+                      // disperseEtherAsync()
+                      sendLamports();
+                    }}
+                  >
                     Disperse
                   </Button>
                   <span className="text-[13px] text-muted-foreground">
-                    Total: {formattedTotal} {balance?.symbol}
+                    Total: {formattedTotal}{" "}
+                    {connected ? "sol" : balance?.symbol}
                   </span>
                 </div>
               )}
