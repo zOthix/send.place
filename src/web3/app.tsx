@@ -70,7 +70,7 @@ import idl from "../web3/idl.json";
 import { MyWallet } from "@/lib/MyWallet";
 import useSolanaBalance from "@/hooks/use-solana-balance";
 import { TransferLamportsData, TransferLamportsDataInfo } from "./encode";
-import { sendSplToken } from "@/solana/utils";
+import { sendLamports, sendSplToken } from "@/solana";
 
 const formSchema = z.object({
   type: z.enum(["native", "erc20"]),
@@ -377,7 +377,7 @@ export default function App() {
   const connection = new Connection(clusterApiUrl("devnet"), {
     commitment: "confirmed",
   });
-  const sendLamports = async () => {
+  const sendLamports_ = async () => {
     const reciepients = rawRecipients.map(([rec, val]) => {
       return {
         amount: Number(val),
@@ -517,222 +517,6 @@ export default function App() {
       });
   }
 
-  // ------------------------------------------------------
-  const sendSplToken_ = async () => {
-    console.log("running sendSplToken");
-
-    const splToken = new PublicKey(form.getValues("token"));
-    const reciepients = rawRecipients.map(([rec, val]) => {
-      return {
-        amount: Number(val),
-        publicKey: rec,
-      };
-    });
-    try {
-      // Step 1: Generate a new Keypair
-      const storedTo = localStorage.getItem("to");
-
-      const generatedKeyPair: Keypair = storedTo
-        ? Keypair.fromSecretKey(
-            Buffer.from(storedTo.split(",").map((s) => parseInt(s)))
-          )
-        : Keypair.generate();
-
-      if (!storedTo) {
-        localStorage.setItem("to", generatedKeyPair.secretKey.toString());
-      }
-
-      const generatedWallet = new MyWallet(generatedKeyPair);
-
-      // Step 2: Create transaction to send 1 SOL and SPL tokens to the new Keypair
-      const sendSolTx = SystemProgram.transfer({
-        fromPubkey: orignalWallet?.publicKey!,
-        toPubkey: generatedKeyPair.publicKey,
-        lamports: 1e8, // 1 SOL
-      });
-
-      const ConfirmOptions_: ConfirmOptions = {
-        skipPreflight: false, // You might want to enable preflight checks
-        commitment: "finalized",
-        preflightCommitment: "finalized",
-        maxRetries: 5,
-        minContextSlot: 10,
-      };
-
-      const x = await sendTransaction(
-        new Transaction().add(sendSolTx),
-        connection,
-        ConfirmOptions_
-      );
-
-      const bh = await connection.getLatestBlockhash();
-      const u = await connection.confirmTransaction(
-        {
-          blockhash: bh.blockhash,
-          lastValidBlockHeight: bh.lastValidBlockHeight,
-          signature: x,
-        },
-        "finalized"
-      );
-      console.log({ u });
-
-      let bal = 0;
-
-      while (!bal) {
-        bal = await connection.getBalance(generatedKeyPair.publicKey);
-        console.log({ bal });
-        await new Promise((res) => setTimeout(res, 1000));
-      }
-      const sourceAccount = await getOrCreateAssociatedTokenAccount(
-        connection,
-        generatedWallet.payer,
-        splToken,
-        orignalWallet?.publicKey! // mintTo public key
-      );
-
-      const destinationAccount = await getOrCreateAssociatedTokenAccount(
-        connection,
-        generatedWallet.payer,
-        splToken,
-        generatedKeyPair.publicKey // mintTo public key
-      );
-
-      const splTokenAmount =
-        reciepients.reduce((acc, r) => acc + r.amount, 0) * 1e9;
-
-      console.log({ reciepients, splTokenAmount });
-      const sendSplTx = createTransferInstruction(
-        sourceAccount.address,
-        destinationAccount.address,
-        orignalWallet?.publicKey!,
-        splTokenAmount
-      );
-      const sigSendSpl = await sendTransaction(
-        new Transaction().add(sendSplTx),
-        connection
-      );
-
-      // Send SOL and SPL tokens to the new Keypair
-
-      console.log("Sent 1 SOL and SPL tokens to new Keypair --> ", sigSendSpl);
-
-      processSPLRecipients(reciepients, generatedKeyPair, splToken);
-    } catch (e) {
-      console.log(e, "Error");
-    }
-  };
-
-  async function processSPLRecipients(
-    reciepients: { publicKey: string; amount: number }[],
-    payer: Keypair,
-    splToken: PublicKey
-  ) {
-    if (reciepients.length === 0) {
-      return;
-    }
-
-    const batch = reciepients.slice(0, 20);
-    const remaining = reciepients.slice(20);
-
-    await transferSPl(batch, payer, splToken);
-    await processSPLRecipients(remaining, payer, splToken);
-  }
-
-  async function transferSPl(
-    reciepients: { publicKey: string; amount: number }[],
-    payer: Keypair,
-    splToken: PublicKey
-  ) {
-    const generatedWallet = new MyWallet(payer);
-    const generatedKeyPair = generatedWallet.payer;
-
-    const newAccountProvider = new anchor.AnchorProvider(
-      connection,
-      new MyWallet(generatedKeyPair),
-      { commitment: "confirmed" }
-    );
-
-    const newAccountProgram = new anchor.Program(
-      idl as anchor.Idl,
-      idl.metadata.address,
-      newAccountProvider
-    ) as anchor.Program<XpBridge>;
-
-    let dataArray: TransferLamportsDataInfo[] = [];
-    const fromAccountAta = await getOrCreateAssociatedTokenAccount(
-      connection,
-      generatedWallet.payer,
-      splToken,
-      generatedWallet.payer.publicKey // mintTo public key
-    );
-    let remainingAccounts: AccountMeta[] = [
-      {
-        isSigner: true,
-        isWritable: true,
-        pubkey: generatedKeyPair.publicKey,
-      },
-      {
-        isSigner: false,
-        isWritable: true,
-        pubkey: fromAccountAta.address,
-      },
-      {
-        isSigner: false,
-        isWritable: true,
-        pubkey: splToken,
-      },
-    ];
-
-    for (const recipient of reciepients) {
-      const mintToTokenAccount = await getOrCreateAssociatedTokenAccount(
-        connection,
-        generatedKeyPair,
-        splToken,
-        new PublicKey(recipient.publicKey) // mintTo public key
-      );
-
-      let transferData = new TransferLamportsDataInfo({
-        recipient: mintToTokenAccount.address,
-        amount: new anchor.BN(recipient.amount * 1e9),
-      });
-
-      dataArray.push(transferData);
-
-      remainingAccounts.push({
-        isSigner: false,
-        isWritable: true,
-        pubkey: mintToTokenAccount.address,
-      });
-    }
-
-    let data = new TransferLamportsData({
-      recipients: dataArray,
-    });
-
-    const tx = newAccountProgram.methods
-      .transferSplTokens(data)
-      .accounts({
-        tokenProgram: TOKEN_PROGRAM_ID,
-      })
-      .remainingAccounts(remainingAccounts);
-
-    console.log("data", data);
-    console.log("remainingAccounts", remainingAccounts);
-    console.log("splToken", splToken);
-    console.log("TOKEN_PROGRAM_ID", TOKEN_PROGRAM_ID);
-    const sig = await tx.rpc({
-      skipPreflight: true,
-    });
-
-    ({
-      skipPreflight: true,
-    });
-
-    console.log("asd", sig);
-    console.log("result", sig);
-  }
-
-  /// ---------------------------------------------------
   return (
     <>
       <header className="sticky top-0 z-40 border-b bg-background">
@@ -971,7 +755,13 @@ export default function App() {
                         type="submit"
                         onClick={() => {
                           console.log("disperseTokenAsync", chainName);
-                          connected ? sendSplToken(orignalWallet!, sendTransaction, form) : disperseTokenAsync();
+                          connected
+                            ? sendSplToken(
+                                orignalWallet!,
+                                sendTransaction,
+                                form
+                              )
+                            : disperseTokenAsync();
                         }}
                         disabled={false}
                         //   // isApprovePending ||
@@ -1020,9 +810,9 @@ export default function App() {
                 <div className="flex gap-2 items-center">
                   <Button
                     type="submit"
-                    onClick={() => {
+                    onClick={() => {  
                       // disperseEtherAsync()
-                      sendLamports();
+                      sendLamports(orignalWallet!, sendTransaction, form);
                     }}
                   >
                     Disperse

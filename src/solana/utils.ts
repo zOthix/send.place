@@ -3,34 +3,24 @@ import {
   Keypair,
   SystemProgram,
   Transaction,
-  clusterApiUrl,
-  Connection,
   type ConfirmOptions,
   type AccountMeta,
+  Connection,
+  clusterApiUrl,
 } from "@solana/web3.js";
-import {
-  getOrCreateAssociatedTokenAccount,
-  createTransferInstruction,
-  TOKEN_PROGRAM_ID,
-} from "@solana/spl-token";
+import { getOrCreateAssociatedTokenAccount, createTransferInstruction, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import * as anchor from "@project-serum/anchor";
-// Adjust the import path accordingly
-
-import type { Wallet } from "@project-serum/anchor";
-import type { UseFormReturn } from "react-hook-form";
-import type {
-  AnchorWallet,
-  WalletContextState,
-} from "@solana/wallet-adapter-react";
 import type { XpBridge } from "@/web3/solana_idl";
 import { TransferLamportsData, TransferLamportsDataInfo } from "@/web3/encode";
-import idl from "../web3/idl.json"
-
+import idl from "../web3/idl.json";
+import { toast } from "sonner";
+import type { AnchorWallet, WalletContextState } from "@solana/wallet-adapter-react";
 
 export const connection = new Connection(clusterApiUrl("devnet"), {
   commitment: "confirmed",
 });
-export class SolanaWallet implements Wallet {
+
+export class SolanaWallet implements anchor.Wallet {
   constructor(readonly payer: Keypair) {
     this.payer = payer;
   }
@@ -52,23 +42,15 @@ export class SolanaWallet implements Wallet {
   }
 }
 
-export function parseInput(inputStrings: string[]): [string, string][] {
-  // Parse the input strings
-  const parsedOutput = inputStrings.map((inputString) => {
-    // Split the input string by the first space character
+export const parseInput = (inputStrings: string[]): [string, string][] => {
+  return inputStrings.map((inputString) => {
     const [address, value] = inputString.split(/[ ,=]+/);
-
-    // Return the address and value as a tuple
     return [address, value] as [string, string];
   });
-
-  // Return the parsed output as a 2D array
-  return parsedOutput;
-}
-
+};
 
 export const formatRecipients = (
-  rawRecipients: any[]
+  rawRecipients: [string, string][]
 ): { publicKey: string; amount: number }[] => {
   return rawRecipients.map(([rec, val]) => ({
     amount: Number(val),
@@ -76,7 +58,7 @@ export const formatRecipients = (
   }));
 };
 
-export const getGeneratedKeypair = (): Keypair => {
+export const  getGeneratedKeypair = (): Keypair => {
   const storedTo = localStorage.getItem("to");
   const keypair = storedTo
     ? Keypair.fromSecretKey(
@@ -89,6 +71,101 @@ export const getGeneratedKeypair = (): Keypair => {
   }
 
   return keypair;
+};
+
+export const calculateTotalAmount = (
+  recipients: { publicKey: string; amount: number }[]
+): number => {
+  return recipients.reduce((acc, recipient) => acc + recipient.amount, 0) * 1e9;
+};
+
+export const processRecipients = async (
+  to: Keypair,
+  recipients: { publicKey: string; amount: number }[],
+  sendLamportsToUsers: (to: Keypair, batch: { publicKey: string; amount: number }[]) => Promise<void>
+) => {
+  if (recipients.length === 0) {
+    return;
+  }
+
+  const batch = recipients.slice(0, 20);
+  const remaining = recipients.slice(20);
+
+  await sendLamportsToUsers(to, batch);
+  await processRecipients(to, remaining, sendLamportsToUsers);
+};
+
+export const sendLamportsToUsers = async (
+  to: Keypair,
+  recipients: { publicKey: string; amount: number }[]
+) => {
+  const payer = Keypair.fromSecretKey(to.secretKey);
+  const newWallet = new SolanaWallet(payer);
+
+  const provider = new anchor.AnchorProvider(connection, newWallet, {
+    commitment: "confirmed",
+  });
+
+  const program = new anchor.Program(
+    idl as anchor.Idl,
+    idl.metadata.address,
+    provider
+  ) as anchor.Program<XpBridge>;
+
+  const data = {
+    recipients: recipients.map((r) => ({
+      recipient: new PublicKey(r.publicKey),
+      amount: new anchor.BN(r.amount * 1e9),
+    })),
+  };
+
+  let remainingAccounts: AccountMeta[] = [];
+  remainingAccounts.push({
+    isSigner: true,
+    isWritable: true,
+    pubkey: newWallet.publicKey,
+  });
+  remainingAccounts.push({
+    isSigner: false,
+    isWritable: true,
+    pubkey: SystemProgram.programId,
+  });
+
+  recipients.forEach((r) => {
+    remainingAccounts.push({
+      isSigner: false,
+      isWritable: true,
+      pubkey: new PublicKey(r.publicKey),
+    });
+  });
+
+  const tx = program.methods
+    .transferLamports(data)
+    .accounts({
+      systemProgram: SystemProgram.programId,
+    })
+    .remainingAccounts(remainingAccounts);
+
+  await tx.rpc({ skipPreflight: true })
+    .then((sig) => {
+      toast.success(
+        `<>
+          Disperse successful.{" "}
+          <a
+            href={"https://explorer.solana.com/tx/" + sig}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            View on Solana
+          </a>
+        </>`
+      );
+      console.log("result", sig);
+    })
+    .catch((err) => {
+      console.error(err);
+      toast.error("Something went wrong");
+    });
 };
 
 export const sendSol = async (
@@ -136,12 +213,6 @@ export const waitForBalance = async (publicKey: PublicKey) => {
     console.log({ balance });
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
-};
-
-export const calculateTotalAmount = (
-  recipients: { publicKey: string; amount: number }[]
-): number => {
-  return recipients.reduce((acc, recipient) => acc + recipient.amount, 0) * 1e9;
 };
 
 export const sendSplTokens = async (
