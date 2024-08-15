@@ -2,7 +2,7 @@ import type {
   AnchorWallet,
   WalletContextState,
 } from "@solana/wallet-adapter-react";
-import { clusterApiUrl, Connection, PublicKey } from "@solana/web3.js";
+import { PublicKey } from "@solana/web3.js";
 import type { UseFormReturn } from "react-hook-form";
 import {
   calculateTotalAmount,
@@ -17,12 +17,6 @@ import {
 } from "./utils";
 import { getOrCreateAssociatedTokenAccount } from "@solana/spl-token";
 
-/**
- *
- * @param originalWallet
- * @param sendTransaction
- * @param form
- */
 export const sendSplToken = async (
   originalWallet: AnchorWallet,
   sendTransaction: WalletContextState["sendTransaction"],
@@ -36,8 +30,6 @@ export const sendSplToken = async (
     undefined
   >
 ) => {
-  console.log("running sendSplToken");
-
   const splToken = new PublicKey(form.getValues("token"));
   const rawBody = form.watch("recipients");
   const rawRecipients = rawBody ? parseInput(rawBody.split("\n")) : [];
@@ -72,8 +64,6 @@ export const sendSplToken = async (
       sendTransaction
     );
 
-    console.log("Sent 1 SOL and SPL tokens to new Keypair");
-
     await processSPLRecipients(recipients, generatedKeyPair, splToken);
   } catch (error) {
     console.error("Error sending SPL token:", error);
@@ -101,7 +91,6 @@ export const sendLamports = async (
   const recipients = formatRecipients(rawRecipients);
   const to = getGeneratedKeypair();
   const lamportsNeeded = calculateTotalAmount(recipients);
-  console.log("LAMPORTS NEEDED", lamportsNeeded, recipients);
   const transaction = new Transaction().add(
     SystemProgram.transfer({
       fromPubkey: originalWallet?.publicKey!,
@@ -110,8 +99,6 @@ export const sendLamports = async (
     })
   );
 
-  const signature = await sendTransaction(transaction, connection);
-  console.log("SIGNATURE", signature);
-
+  await sendTransaction(transaction, connection);
   await processRecipients(to, recipients, sendLamportsToUsers);
 };

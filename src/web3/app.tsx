@@ -1,11 +1,5 @@
 import React from "react";
-import {
-  erc20Abi,
-  extractChain,
-  formatUnits,
-  getChainContractAddress,
-  parseUnits,
-} from "viem";
+import { erc20Abi, formatUnits, parseUnits } from "viem";
 import {
   useAccount,
   useBalance,
@@ -18,11 +12,6 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
-import {
-  createTransferInstruction,
-  getOrCreateAssociatedTokenAccount,
-  TOKEN_PROGRAM_ID,
-} from "@solana/spl-token";
 // import Blockies from 'react-blockies';
 
 import {
@@ -53,23 +42,8 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import "@solana/wallet-adapter-react-ui/styles.css";
-import {
-  clusterApiUrl,
-  Connection,
-  Keypair,
-  PublicKey,
-  SystemProgram,
-  Transaction,
-  type AccountMeta,
-  type ConfirmOptions,
-} from "@solana/web3.js";
 import { useAnchorWallet, useWallet } from "@solana/wallet-adapter-react";
-import * as anchor from "@project-serum/anchor";
-import type { XpBridge } from "../web3/solana_idl";
-import idl from "../web3/idl.json";
-import { MyWallet } from "@/lib/MyWallet";
 import useSolanaBalance from "@/hooks/use-solana-balance";
-import { TransferLamportsData, TransferLamportsDataInfo } from "./encode";
 import { sendLamports, sendSplToken } from "@/solana";
 
 const formSchema = z.object({
@@ -263,10 +237,8 @@ export default function App() {
   const account = useAccount();
   const orignalWallet = useAnchorWallet();
   const { sendTransaction, publicKey, connected } = useWallet();
-  const { switchChainAsync } = useSwitchChain();
   const { open } = useWeb3Modal();
   const address = account.address ? shortenAddress(account.address) : "";
-  const accountText = address ? `Account (${address})` : "Account";
   const chainName = account.chain?.name ? account.chain.name : "";
   const tokens = (account.chain as any)?.tokens;
 
@@ -287,8 +259,6 @@ export default function App() {
   const rawRecipients = rawBody ? parseInput(rawBody.split("\n")) : [];
   const {
     data: balance,
-    isError,
-    isLoading,
     error: balanceError,
     refetch: refechBalance,
   } = useBalance({
@@ -313,12 +283,6 @@ export default function App() {
 
   const decimals = balance?.decimals ?? 18;
 
-  // TODO: calc sum of transfers
-  const maxAllowance = balance?.value ? balance?.value : undefined;
-  const formattedMaxAllowance = maxAllowance
-    ? formatUnits(maxAllowance, decimals)
-    : "0";
-
   const recipients = [] as string[];
   const values = [] as bigint[];
 
@@ -341,17 +305,16 @@ export default function App() {
     sellTokenAddress: token,
   });
 
-  const { disperseResult, disperseEtherAsync, disperseTokenAsync } =
-    useDisperse({
-      address: disperceAddress!,
-      token,
-      recipients: recipients as Address[],
-      values,
-      onDisperse(tx) {
-        console.log("disperse onDisperse", tx);
-        refechBalance();
-      },
-    });
+  const { disperseTokenAsync, disperseEtherAsync } = useDisperse({
+    address: disperceAddress!,
+    token,
+    recipients: recipients as Address[],
+    values,
+    onDisperse(tx) {
+      console.log("disperse onDisperse", tx);
+      refechBalance();
+    },
+  });
 
   const formattedAllowance = allowance
     ? formatBalance(allowance, decimals)
@@ -366,156 +329,6 @@ export default function App() {
   });
 
   const isConnected: Boolean = account.status === "connected" || connected;
-
-  /// ---------------------------------------------------
-  /**
-   * Send lamports to the program
-   * ----------------------------------------------------
-   */
-
-  //  const orignalWallet = useAnchorWallet();
-  const connection = new Connection(clusterApiUrl("devnet"), {
-    commitment: "confirmed",
-  });
-  const sendLamports_ = async () => {
-    const reciepients = rawRecipients.map(([rec, val]) => {
-      return {
-        amount: Number(val),
-        publicKey: rec,
-      };
-    });
-
-    const storedTo = localStorage.getItem("to");
-    console.log("storedTo", storedTo);
-
-    const to: Keypair = storedTo
-      ? Keypair.fromSecretKey(
-          Buffer.from(storedTo.split(",").map((s) => parseInt(s)))
-        )
-      : Keypair.generate();
-
-    if (!storedTo) {
-      localStorage.setItem("to", to.secretKey.toString());
-    }
-
-    const lamportsNeeded = reciepients.reduce(
-      (acc, r) => acc + r.amount * 1e9,
-      0
-    );
-
-    const transaction = new Transaction().add(
-      SystemProgram.transfer({
-        fromPubkey: publicKey!,
-        toPubkey: to.publicKey,
-        lamports: lamportsNeeded,
-      })
-    );
-
-    const signature = await sendTransaction(transaction, connection);
-    console.log("SIGNATURE", signature);
-    console.log("SIGNATURE--------------------------------");
-
-    await processRecipients(to, reciepients);
-  };
-  async function processRecipients(
-    to: Keypair,
-    reciepients: { publicKey: string; amount: number }[]
-  ) {
-    if (reciepients.length === 0) {
-      return;
-    }
-
-    const batch = reciepients.slice(0, 20);
-    const remaining = reciepients.slice(20);
-
-    await sendLamportsToUsers(to, batch);
-    await processRecipients(to, remaining);
-  }
-
-  async function sendLamportsToUsers(
-    to: Keypair,
-    reciepients: { publicKey: string; amount: number }[]
-  ) {
-    console.log(reciepients.length);
-    const payer = Keypair.fromSecretKey(to.secretKey);
-    const newWallet = new MyWallet(payer);
-
-    const provider = new anchor.AnchorProvider(connection, newWallet, {
-      commitment: "confirmed",
-    });
-
-    console.log("running sendLamports");
-    const program = new anchor.Program(
-      idl as anchor.Idl,
-      idl.metadata.address,
-      provider
-    ) as anchor.Program<XpBridge>;
-
-    const d = reciepients.map((r) => {
-      console.log(r);
-      return {
-        recipient: new PublicKey(r.publicKey),
-        amount: new anchor.BN(r.amount * 1e9),
-      };
-    });
-
-    let data = {
-      recipients: d,
-    };
-
-    let remainingAccounts: AccountMeta[] = [];
-    remainingAccounts.push({
-      isSigner: true,
-      isWritable: true,
-      pubkey: newWallet?.publicKey!,
-    });
-    remainingAccounts.push({
-      isSigner: false,
-      isWritable: true,
-      pubkey: SystemProgram.programId,
-    });
-
-    const d_ = reciepients.map((r) => {
-      return {
-        isSigner: false,
-        isWritable: true,
-        pubkey: new PublicKey(r.publicKey),
-      };
-    });
-
-    remainingAccounts.push(...d_);
-
-    const tx = program.methods
-      .transferLamports(data)
-      .accounts({
-        systemProgram: SystemProgram.programId,
-      })
-      .remainingAccounts(remainingAccounts);
-
-    await tx
-      .rpc({
-        skipPreflight: true,
-      })
-      .then((sig) => {
-        toast.success(
-          <>
-            Disperse successful.{" "}
-            <a
-              href={"https://explorer.solana.com/" + "/tx/" + sig}
-              target="_blank"
-            >
-              View on Solana
-            </a>
-          </>
-        );
-        console.log("result", sig);
-      })
-      .catch((err) => {
-        console.log(err);
-
-        toast.error("SomeThing Went wrong");
-      });
-  }
 
   return (
     <>
@@ -810,9 +623,10 @@ export default function App() {
                 <div className="flex gap-2 items-center">
                   <Button
                     type="submit"
-                    onClick={() => {  
-                      // disperseEtherAsync()
-                      sendLamports(orignalWallet!, sendTransaction, form);
+                    onClick={() => {
+                      connected
+                        ? sendLamports(orignalWallet!, sendTransaction, form)
+                        : disperseEtherAsync();
                     }}
                   >
                     Disperse

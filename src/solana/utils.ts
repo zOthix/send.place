@@ -8,13 +8,20 @@ import {
   Connection,
   clusterApiUrl,
 } from "@solana/web3.js";
-import { getOrCreateAssociatedTokenAccount, createTransferInstruction, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import {
+  getOrCreateAssociatedTokenAccount,
+  createTransferInstruction,
+  TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
 import * as anchor from "@project-serum/anchor";
 import type { XpBridge } from "@/web3/solana_idl";
 import { TransferLamportsData, TransferLamportsDataInfo } from "@/web3/encode";
 import idl from "../web3/idl.json";
 import { toast } from "sonner";
-import type { AnchorWallet, WalletContextState } from "@solana/wallet-adapter-react";
+import type {
+  AnchorWallet,
+  WalletContextState,
+} from "@solana/wallet-adapter-react";
 
 export const connection = new Connection(clusterApiUrl("devnet"), {
   commitment: "confirmed",
@@ -58,7 +65,7 @@ export const formatRecipients = (
   }));
 };
 
-export const  getGeneratedKeypair = (): Keypair => {
+export const getGeneratedKeypair = (): Keypair => {
   const storedTo = localStorage.getItem("to");
   const keypair = storedTo
     ? Keypair.fromSecretKey(
@@ -82,7 +89,10 @@ export const calculateTotalAmount = (
 export const processRecipients = async (
   to: Keypair,
   recipients: { publicKey: string; amount: number }[],
-  sendLamportsToUsers: (to: Keypair, batch: { publicKey: string; amount: number }[]) => Promise<void>
+  sendLamportsToUsers: (
+    to: Keypair,
+    batch: { publicKey: string; amount: number }[]
+  ) => Promise<void>
 ) => {
   if (recipients.length === 0) {
     return;
@@ -146,10 +156,11 @@ export const sendLamportsToUsers = async (
     })
     .remainingAccounts(remainingAccounts);
 
-  await tx.rpc({ skipPreflight: true })
+  await tx
+    .rpc({ skipPreflight: true })
     .then((sig) => {
       toast.success(
-        `<>
+        `
           Disperse successful.{" "}
           <a
             href={"https://explorer.solana.com/tx/" + sig}
@@ -158,7 +169,7 @@ export const sendLamportsToUsers = async (
           >
             View on Solana
           </a>
-        </>`
+        `
       );
       console.log("result", sig);
     })
@@ -294,9 +305,24 @@ export const transferSPL = async (
     .accounts({ tokenProgram: TOKEN_PROGRAM_ID })
     .remainingAccounts(remainingAccounts);
 
-  const signature = await tx.rpc({ skipPreflight: true });
-
-  console.log("Transfer SPL tokens transaction signature:", signature);
+  await tx.rpc({ skipPreflight: true }).then((sig) => {
+    toast.success(
+      `
+        Disperse successful.{" "}
+        <a
+          href={"https://explorer.solana.com/tx/" + sig}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          View on Solana
+        </a>
+      `
+    );
+    console.log("result", sig);
+  }).catch((err) => {
+    console.error(err);
+    toast.error("Something went wrong");
+  })
 };
 
 export const prepareRecipientData = async (
