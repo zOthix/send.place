@@ -35,11 +35,14 @@ import { useDisperse } from "@/hooks/use-disperse";
 import { formSchema, parseInput, shortenAddress } from "@/utils/input";
 import useSplTokenBalance from "@/hooks/use-spl-token-balance";
 import type { PublicKey } from "@solana/web3.js";
+import { connection } from "@/utils/solana/utils";
+import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 
 export default function App() {
   const account = useAccount();
   const orignalWallet = useAnchorWallet();
-  const { sendTransaction, publicKey, connected } = useWallet();
+  const { sendTransaction, publicKey, connecting, connected, signMessage } =
+    useWallet();
   const { open } = useWeb3Modal();
   const address = account.address ? shortenAddress(account.address) : "";
   const chainName = account.chain?.name ? account.chain.name : "";
@@ -148,7 +151,20 @@ export default function App() {
             <span className="font-bold sm:inline-block">{siteConfig.name}</span>
           </a>
           <div className="flex items-center space-x-4">
-            <ChooseWallet />
+            {/* {connected || connecting ? ( */}
+              <WalletMultiButton
+                style={{
+                  background: "#1e1e1e",
+                  borderRadius: "9999px",
+                  padding: "1rem",
+                  height: "2.5rem",
+                }}
+              />
+            {/* // ) : account.status === "connected" ? ( */}
+              <w3m-connect-button />
+            {/* // ) : ( */}
+              <ChooseWallet />
+            {/* // )} */}
           </div>
         </div>
       </header>
@@ -348,16 +364,20 @@ export default function App() {
                             ? sendSplToken(
                                 orignalWallet!,
                                 sendTransaction,
-                                form
+                                form,
+                                signMessage
                               )
                             : disperseTokenAsync();
                         }}
                         disabled={
-                          (isApprovePending ||
-                          isAllowanceLoading ||
-                          !token ||
-                          allowance === undefined 
-                          ) && (!connected || total === 0n ||  splBalance(token) < total )
+                          // (isApprovePending ||
+                          //   isAllowanceLoading ||
+                          //   !token ||
+                          //   allowance === undefined) &&
+                          // (!connected ||
+                          //   total === 0n ||
+                          //   splBalance(token) < total)
+                          false
                         }
                       >
                         Disperse
@@ -402,7 +422,12 @@ export default function App() {
                     type="submit"
                     onClick={() => {
                       connected
-                        ? sendLamports(orignalWallet!, sendTransaction, form)
+                        ? sendLamports(
+                            orignalWallet!,
+                            sendTransaction,
+                            form,
+                            signMessage
+                          )
                         : disperseEtherAsync();
                     }}
                   >

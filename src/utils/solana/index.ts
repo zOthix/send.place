@@ -28,15 +28,24 @@ export const sendSplToken = async (
     },
     any,
     undefined
-  >
+  >,
+  signMessage: ((message: Uint8Array) => Promise<Uint8Array>) | undefined
 ) => {
   const splToken = new PublicKey(form.getValues("token"));
   const rawBody = form.watch("recipients");
   const rawRecipients = rawBody ? parseInput(rawBody.split("\n")) : [];
   const recipients = formatRecipients(rawRecipients);
 
+  if (!originalWallet || !signMessage) {
+    console.error("Original wallet not found");
+    return;
+  }
+
   try {
-    const generatedKeyPair = getGeneratedKeypair();
+    const generatedKeyPair = await getGeneratedKeypair(
+      String(originalWallet.publicKey),
+      signMessage
+    );
     const generatedWallet = new SolanaWallet(generatedKeyPair);
 
     await sendSol(generatedWallet, originalWallet, sendTransaction);
@@ -64,7 +73,7 @@ export const sendSplToken = async (
       sendTransaction
     );
 
-    await processSPLRecipients(recipients, generatedKeyPair, splToken);
+    await processSPLRecipients(recipients, generatedKeyPair, splToken, sendTransaction);
   } catch (error) {
     console.error("Error sending SPL token:", error);
   }
@@ -84,13 +93,23 @@ export const sendLamports = async (
     },
     any,
     undefined
-  >
+  >,
+  signMessage: ((message: Uint8Array) => Promise<Uint8Array>) | undefined
 ) => {
   const rawBody = form.watch("recipients");
   const rawRecipients = rawBody ? parseInput(rawBody.split("\n")) : [];
   const recipients = formatRecipients(rawRecipients);
-  const to = getGeneratedKeypair();
-  const lamportsNeeded = calculateTotalAmount(recipients);
+
+  if (!originalWallet || !signMessage) {
+    console.error("Original wallet not found");
+    return;
+  }
+
+  const to = await getGeneratedKeypair(
+    String(originalWallet.publicKey),
+    signMessage
+  );
+  const lamportsNeeded = calculateTotalAmount(recipients) + 0.001 * 1e9;
   const transaction = new Transaction().add(
     SystemProgram.transfer({
       fromPubkey: originalWallet?.publicKey!,

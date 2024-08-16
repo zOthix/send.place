@@ -7,6 +7,7 @@ import {
   type AccountMeta,
   Connection,
   clusterApiUrl,
+  TransactionInstruction,
 } from "@solana/web3.js";
 import {
   getOrCreateAssociatedTokenAccount,
@@ -22,6 +23,7 @@ import type {
   AnchorWallet,
   WalletContextState,
 } from "@solana/wallet-adapter-react";
+import { CryptoService } from "../crypto";
 
 /**
  *  Connection to the devnet
@@ -30,7 +32,10 @@ export const connection = new Connection(clusterApiUrl("devnet"), {
   commitment: "confirmed",
 });
 
-
+const confirmOptions: ConfirmOptions = {
+  skipPreflight: false,
+  commitment: "confirmed",
+};
 export class SolanaWallet implements anchor.Wallet {
   constructor(readonly payer: Keypair) {
     this.payer = payer;
@@ -54,8 +59,8 @@ export class SolanaWallet implements anchor.Wallet {
 }
 
 /**
- * 
- * @param inputStrings 
+ *
+ * @param inputStrings
  * @returns   [string, string][]
  */
 export const parseInput = (inputStrings: string[]): [string, string][] => {
@@ -66,8 +71,8 @@ export const parseInput = (inputStrings: string[]): [string, string][] => {
 };
 
 /**
- * 
- * @param rawRecipients 
+ *
+ * @param rawRecipients
  * @returns Recipients[]
  */
 export const formatRecipients = (
@@ -78,29 +83,67 @@ export const formatRecipients = (
     publicKey: rec,
   }));
 };
+// const crypto = new CryptoService("asdadadad");
+
+// /**
+//  *
+//  * @param data
+//  * @param secretKey
+//  * @returns
+//  */
+// export const encrypt = async (data: string, secretKey: string) => {
+//   // const crypto = new CryptoService(secretKey);
+//   const { encrypted } = await crypto.encrypt(data);
+//   return encrypted;
+// };
+
+// /**
+//  *
+//  * @param encryptedText
+//  * @param secretKey
+//  * @returns
+//  */
+// export const decrypt = async (encryptedText: string, secretKey: string) => {
+//   const decrypted = await crypto.decrypt(encryptedText);
+//   return decrypted;
+// };
 
 /**
- * 
+ *
  * @returns Keypair
  */
-export const getGeneratedKeypair = (): Keypair => {
-  const storedTo = localStorage.getItem("to");
-  const keypair = storedTo
+export const getGeneratedKeypair = async (
+  publicKey: string,
+  signMessage: (message: Uint8Array) => Promise<Uint8Array>
+): Promise<Keypair> => {
+  const storedHash = localStorage.getItem("to");
+  const SignedSecret = await signSecretMessage(publicKey, signMessage);
+  console.log(String(SignedSecret), SignedSecret?.toString());
+  const cryptoService = new CryptoService(String(SignedSecret));
+  console.log({ storedHash });
+  const decryptedHash = storedHash
+    ? await cryptoService.decrypt(storedHash)
+    : null;
+  const keypair = decryptedHash
     ? Keypair.fromSecretKey(
-        Buffer.from(storedTo.split(",").map((s) => parseInt(s)))
+        Buffer.from(decryptedHash.split(",").map((s) => parseInt(s)))
       )
     : Keypair.generate();
 
-  if (!storedTo) {
-    localStorage.setItem("to", keypair.secretKey.toString());
+  if (!decryptedHash) {
+    const secretKey = keypair.secretKey.toString();
+    console.log({ secretKey });
+    const encrypted = await cryptoService.encrypt(secretKey);
+    console.log("encrypted", encrypted);
+    localStorage.setItem("to", encrypted.encrypted);
   }
 
   return keypair;
 };
 
 /**
- * 
- * @param recipients 
+ *
+ * @param recipients
  * @returns number
  */
 export const calculateTotalAmount = (
@@ -110,10 +153,10 @@ export const calculateTotalAmount = (
 };
 
 /**
- * 
- * @param to 
- * @param recipients 
- * @param sendLamportsToUsers 
+ *
+ * @param to
+ * @param recipients
+ * @param sendLamportsToUsers
  * @returns Promise<void>
  */
 export const processRecipients = async (
@@ -136,9 +179,9 @@ export const processRecipients = async (
 };
 
 /**
- * 
- * @param to 
- * @param recipients 
+ *
+ * @param to
+ * @param recipients
  */
 export const sendLamportsToUsers = async (
   to: Keypair,
@@ -215,10 +258,10 @@ export const sendLamportsToUsers = async (
 };
 
 /**
- * 
- * @param generatedWallet 
- * @param originalWallet 
- * @param sendTransaction 
+ *
+ * @param generatedWallet
+ * @param originalWallet
+ * @param sendTransaction
  */
 export const sendSol = async (
   generatedWallet: SolanaWallet,
@@ -230,14 +273,6 @@ export const sendSol = async (
     toPubkey: generatedWallet.payer.publicKey,
     lamports: 1.2e8, // 0.1 SOL
   });
-
-  const confirmOptions: ConfirmOptions = {
-    skipPreflight: false,
-    commitment: "finalized",
-    preflightCommitment: "finalized",
-    maxRetries: 5,
-    minContextSlot: 10,
-  };
 
   const transactionSignature = await sendTransaction(
     new Transaction().add(sendSolTx),
@@ -259,8 +294,8 @@ export const sendSol = async (
 };
 
 /**
- * 
- * @param publicKey 
+ *
+ * @param publicKey
  */
 export const waitForBalance = async (publicKey: PublicKey) => {
   let balance = 0;
@@ -272,12 +307,12 @@ export const waitForBalance = async (publicKey: PublicKey) => {
 };
 
 /**
- * 
- * @param sourceAccount 
- * @param destinationAccount 
- * @param splTokenAmount 
- * @param originalWallet 
- * @param sendTransaction 
+ *
+ * @param sourceAccount
+ * @param destinationAccount
+ * @param splTokenAmount
+ * @param originalWallet
+ * @param sendTransaction
  */
 export const sendSplTokens = async (
   sourceAccount: any,
@@ -302,37 +337,69 @@ export const sendSplTokens = async (
 };
 
 /**
- * 
- * @param recipients 
- * @param payer 
- * @param splToken 
+ *
+ * @param recipients
+ * @param payer
+ * @param splToken
  * @returns  Promise<void>
  */
 export const processSPLRecipients = async (
   recipients: { publicKey: string; amount: number }[],
   payer: Keypair,
-  splToken: PublicKey
+  splToken: PublicKey,
+  sendTransaction: WalletContextState["sendTransaction"]
 ) => {
-  if (recipients.length === 0) return;
+  const transactions: TransactionInstruction[] = [];
 
-  const batch = recipients.slice(0, 20);
-  const remaining = recipients.slice(20);
+  console.log(transactions);
+  if (recipients.length === 0) {
+    await sendTransaction(
+      new Transaction().add(...transactions),
+      connection,
+      confirmOptions
+    );
+  }
 
-  await transferSPL(batch, payer, splToken);
-  await processSPLRecipients(remaining, payer, splToken);
+  let remianing = recipients;
+  console.log(remianing);
+  while (remianing.length !== 0) {
+    const batch = remianing.slice(0, 20);
+    remianing = recipients.slice(20);
+    const inst = await transferSPL(batch, payer, splToken);
+    console.log(inst);
+    transactions.push(inst);
+    console.log(transactions);
+  }
+  console.log(transactions);
+
+  const { blockhash } = await connection.getLatestBlockhash();
+  console.log({ blockhash });
+  const messageV0 = new anchor.web3.TransactionMessage({
+    payerKey: payer.publicKey,
+    recentBlockhash: blockhash,
+    instructions: transactions,
+  }).compileToV0Message();
+
+  const transaction = new anchor.web3.VersionedTransaction(messageV0);
+  transaction.sign([payer]);
+
+  const res = await connection.sendTransaction(transaction, confirmOptions);
+
+  console.log(res);
+  // await processSPLRecipients(remaining, payer, splToken, sendTransaction);
 };
 
 /**
- * 
- * @param recipients 
- * @param payer 
- * @param splToken 
+ *
+ * @param recipients
+ * @param payer
+ * @param splToken
  */
 export const transferSPL = async (
   recipients: { publicKey: string; amount: number }[],
   payer: Keypair,
   splToken: PublicKey
-) => {
+): Promise<TransactionInstruction> => {
   const generatedWallet = new SolanaWallet(payer);
   const provider = new anchor.AnchorProvider(connection, generatedWallet, {
     commitment: "confirmed",
@@ -371,32 +438,37 @@ export const transferSPL = async (
     .accounts({ tokenProgram: TOKEN_PROGRAM_ID })
     .remainingAccounts(remainingAccounts);
 
-  await tx.rpc({ skipPreflight: true }).then((sig) => {
-    toast.success(
-      `
-        Disperse successful.{" "}
-        <a
-          href={"https://explorer.solana.com/tx/" + sig}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          View on Solana
-        </a>
-      `
-    );
-    console.log("result", sig);
-  }).catch((err) => {
-    console.error(err);
-    toast.error("Something went wrong");
-  })
+  return await tx.instruction();
+
+  // await tx
+  //   .rpc({ skipPreflight: true })
+  //   .then((sig) => {
+  //     toast.success(
+  //       `
+  //       Disperse successful.{" "}
+  //       <a
+  //         href={"https://explorer.solana.com/tx/" + sig}
+  //         target="_blank"
+  //         rel="noopener noreferrer"
+  //       >
+  //         View on Solana
+  //       </a>
+  //     `
+  //     );
+  //     console.log("result", sig);
+  //   })
+  //   .catch((err) => {
+  //     console.error(err);
+  //     toast.error("Something went wrong");
+  //   });
 };
 
 /**
- * 
- * @param recipients 
- * @param payer 
- * @param splToken 
- * @param remainingAccounts 
+ *
+ * @param recipients
+ * @param payer
+ * @param splToken
+ * @param remainingAccounts
  * @returns Promise<TransferLamportsDataInfo[]>
  */
 export const prepareRecipientData = async (
@@ -428,10 +500,9 @@ export const prepareRecipientData = async (
   );
 };
 
-
 /**
- * 
- * @param publicKey 
+ *
+ * @param publicKey
  * @returns Promise<{ address: string; balance: number }[]>
  */
 export const getSPLTokensInWallet = async (publicKey: PublicKey) => {
@@ -445,4 +516,21 @@ export const getSPLTokensInWallet = async (publicKey: PublicKey) => {
     const balance = token.account.data.parsed.info.tokenAmount.uiAmount;
     return { address, balance };
   });
+};
+
+/**
+ *
+ * @param secretKey
+ * @param signMessage
+ * @returns Promise<Uint8Array>
+ */
+export const signSecretMessage = async (
+  secretKey: string,
+  signMessage: (message: Uint8Array) => Promise<Uint8Array>
+) => {
+  if (!signMessage || !secretKey) {
+    return;
+  }
+  const mesArr = await signMessage(Buffer.from(secretKey, "utf-8"));
+  return mesArr;
 };
