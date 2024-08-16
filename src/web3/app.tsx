@@ -1,17 +1,10 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { erc20Abi, formatUnits, parseUnits } from "viem";
-import {
-  useAccount,
-  useBalance,
-  useReadContract,
-  useSwitchChain,
-  useWriteContract,
-} from "wagmi";
+import { useAccount, useBalance } from "wagmi";
 import { useWeb3Modal } from "@web3modal/wagmi/react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 // import Blockies from 'react-blockies';
 
 import {
@@ -30,208 +23,18 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import EthIcon from "@/assets/icons/eth.svg?react";
 import type { Address } from "viem";
-import disperseAbi from "./disperse-abi";
-// import { chains, type ChainIds, SUPER_LUMIO_CHAIN_ID } from "./config";
 import { siteConfig } from "@/config/site";
 import { formatBalance } from "./format-balance";
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogHeader,
-  DialogTrigger,
-} from "@/components/ui/dialog";
 import "@solana/wallet-adapter-react-ui/styles.css";
 import { useAnchorWallet, useWallet } from "@solana/wallet-adapter-react";
 import useSolanaBalance from "@/hooks/use-solana-balance";
-import { sendLamports, sendSplToken } from "@/solana";
-
-const formSchema = z.object({
-  type: z.enum(["native", "erc20"]),
-  token: z.string().optional(),
-  recipients: z.string().refine((val) => {
-    return parseInput(val.split("\n")).every((parts) => {
-      return (
-        parts.length === 2 &&
-        parts[0].trim() &&
-        !isNaN(parseFloat(parts[1].trim()))
-      );
-    });
-  }, "Each line must be in the format: address, balance"),
-});
-
-export const MAX_ALLOWANCE =
-  115792089237316195423570985008687907853269984665640564039457584007913129639935n;
-
-interface useApproveAllowanceProps {
-  accountAddress?: Address;
-  spenderAddress?: Address;
-  sellTokenAddress: Address;
-}
-
-// Allowance
-// https://0x.org/docs/0x-swap-api/advanced-topics/how-to-set-your-token-allowances
-const useApproveAllowance = ({
-  accountAddress,
-  spenderAddress,
-  sellTokenAddress,
-}: useApproveAllowanceProps) => {
-  const account = useAccount();
-  const chain = account.chain;
-
-  // 1. Read from erc20, does spender (0x Exchange Proxy) have allowance?
-  const {
-    data: allowance,
-    refetch: refetchAllowance,
-    isLoading: isAllowanceLoading,
-  } = useReadContract({
-    address: sellTokenAddress,
-    abi: erc20Abi,
-    functionName: "allowance",
-    args:
-      !!accountAddress && !!spenderAddress
-        ? [accountAddress, spenderAddress]
-        : undefined,
-  });
-
-  React.useEffect(() => {
-    const timer = setInterval(() => refetchAllowance(), 500);
-    return () => clearInterval(timer);
-  }, []);
-
-  // 2. (only if no allowance): write to erc20, approve 0x Exchange Proxy to spend max integer
-  const {
-    isPending: isApprovePending,
-    data: allowanceApproveResult,
-    writeContractAsync,
-    error,
-  } = useWriteContract();
-  const approveAsync = async (maxAllowance: bigint = MAX_ALLOWANCE) => {
-    if (!spenderAddress) return;
-    const tx = await writeContractAsync({
-      address: sellTokenAddress,
-      abi: erc20Abi,
-      functionName: "approve",
-      args: [spenderAddress, maxAllowance],
-    });
-    console.log("approveAsync tx", tx);
-    refetchAllowance();
-    toast.success(
-      <>
-        Approve successful.{" "}
-        <a
-          href={chain?.blockExplorers?.default.url + "/tx/" + tx}
-          target="_blank"
-        >
-          View on {chain?.blockExplorers?.default.name}
-        </a>
-      </>
-    );
-  };
-
-  return {
-    allowance,
-    isAllowanceLoading,
-    isApprovePending,
-    approveAllowanceAsync: approveAsync,
-    refetchAllowance,
-  };
-};
-
-interface UseDisperseProps {
-  address?: Address;
-  token: Address;
-  recipients: Address[];
-  values: bigint[];
-  onDisperse?: (tx: string) => void;
-}
-
-const useDisperse = ({
-  address,
-  token,
-  recipients,
-  values,
-  onDisperse = (tx) => {},
-}: UseDisperseProps) => {
-  const account = useAccount();
-  const chain = account.chain;
-  const {
-    data: disperseResult,
-    writeContractAsync,
-    error: disperseError,
-  } = useWriteContract();
-
-  const disperseTokenAsync = async () => {
-    if (!address) return;
-    const tx = await writeContractAsync({
-      address,
-      abi: disperseAbi,
-      functionName: "disperseToken",
-      args: [token, recipients, values],
-    });
-    console.log("disperseTokenAsync tx", tx);
-    onDisperse(tx);
-    toast.success(
-      <>
-        Disperse successful.{" "}
-        <a
-          href={chain?.blockExplorers?.default.url + "/tx/" + tx}
-          target="_blank"
-        >
-          View on {chain?.blockExplorers?.default.name}
-        </a>
-      </>
-    );
-  };
-
-  const disperseEtherAsync = async () => {
-    if (!address) return;
-    const tx = await writeContractAsync({
-      address,
-      abi: disperseAbi,
-      functionName: "disperseEther",
-      args: [recipients, values],
-      value: values.reduce((a, b): bigint => a + b, 0n),
-    });
-    console.log("disperseEtherAsync tx", tx);
-    onDisperse(tx);
-    toast.success(
-      <>
-        Disperse successful.{" "}
-        <a
-          href={chain?.blockExplorers?.default.url + "/tx/" + tx}
-          target="_blank"
-        >
-          View on {chain?.blockExplorers?.default.name}
-        </a>
-      </>
-    );
-  };
-
-  return {
-    disperseResult,
-    disperseError,
-    disperseTokenAsync,
-    disperseEtherAsync,
-  };
-};
-
-function parseInput(inputStrings: string[]): [string, string][] {
-  // Parse the input strings
-  const parsedOutput = inputStrings.map((inputString) => {
-    // Split the input string by the first space character
-    const [address, value] = inputString.split(/[ ,=]+/);
-
-    // Return the address and value as a tuple
-    return [address, value] as [string, string];
-  });
-
-  // Return the parsed output as a 2D array
-  return parsedOutput;
-}
-
-const shortenAddress = (address: string) =>
-  address ? `${address.slice(0, 6)}...${address.slice(-4)}` : "";
+import { sendLamports, sendSplToken } from "@/utils/solana";
+import ChooseWallet from "@/components/chooseWallet";
+import { useApproveAllowance } from "@/hooks/use-approval-allowance";
+import { useDisperse } from "@/hooks/use-disperse";
+import { formSchema, parseInput, shortenAddress } from "@/utils/input";
+import useSplTokenBalance from "@/hooks/use-spl-token-balance";
+import type { PublicKey } from "@solana/web3.js";
 
 export default function App() {
   const account = useAccount();
@@ -266,14 +69,20 @@ export default function App() {
     token: type === "erc20" && token ? (token as Address) : undefined,
   });
 
+  const { refreshSPLTokenBalance, splBalance } = useSplTokenBalance();
+
   const solBalance = useSolanaBalance();
 
   React.useEffect(() => {
-    const timer = setInterval(() => refechBalance(), 1000);
+    const timer = setInterval(() => {
+      if (!connected) {
+        refechBalance();
+      }
+    }, 1000);
     return () => clearInterval(timer as any);
   }, []);
   React.useEffect(() => {
-    if (address && balanceError?.message) {
+    if (address && balanceError?.message && !connected) {
       toast.error(
         "Error getting balance for: " +
           shortenAddress((balanceError as any)?.contractAddress)
@@ -339,62 +148,7 @@ export default function App() {
             <span className="font-bold sm:inline-block">{siteConfig.name}</span>
           </a>
           <div className="flex items-center space-x-4">
-            {/* {connected ? (
-              <WalletMultiButton
-                style={{
-                  background: "#1e1e1e",
-                  borderRadius: "9999px",
-                  padding: "1rem",
-                  height: "2.5rem",
-                }}
-              />
-            ) : account.status === "connected" ? (
-              chainName ? (
-                <w3m-account-button />
-              ) : (
-                <button
-                  onClick={() => {
-                    open({
-                      view: "Networks",
-                    });
-                  }}
-                  className="bg-blue-600 py-2 px-4 rounded-full"
-                >
-                  Chain not supported
-                </button>
-              )
-            ) : ( */}
-            <Dialog>
-              <DialogTrigger>
-                {/* <Button>Choose Chain</Button> */}
-
-                <Button className="bg-blue-600 py-2 px-4 rounded-full text-white">
-                  {" "}
-                  Choose Wallet{connected}as
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>Choose Chain To Connect</DialogHeader>
-
-                <div className="flex items-center justify-center gap-10">
-                  <w3m-connect-button label="Connect EVM" />
-                  <DialogClose>
-                    <WalletMultiButton
-                      style={{
-                        background: "#3396FF",
-                        borderRadius: "9999px",
-                        padding: "1rem",
-                        height: "2.5rem",
-                      }}
-                      onClick={() => {}}
-                    >
-                      Connect Solana
-                    </WalletMultiButton>
-                  </DialogClose>
-                </div>
-              </DialogContent>
-            </Dialog>
-            {/* )} */}
+            <ChooseWallet />
           </div>
         </div>
       </header>
@@ -506,40 +260,62 @@ export default function App() {
                         ? " " + balance?.symbol
                         : ""}
                     </span>
-                    <span className="whitespace-nowrap flex gap-2 items-center">
-                      <span className="font-medium">Allowance</span>:{" "}
-                      {formattedAllowance} {balance?.symbol}{" "}
-                      {allowance && allowance < total ? (
-                        <span className="text-xs text-muted-foreground opacity-70">
-                          (not enough)
-                        </span>
-                      ) : null}
-                      {allowance && allowance > 0 ? (
+                    {connected ? (
+                      <span className="whitespace-nowrap flex gap-2 items-center">
+                        <span className="font-medium">SPL Token Balance: </span>
+                        {splBalance(form.getValues("token"))}
+                        {splBalance(form.getValues("token")) &&
+                        splBalance(form.getValues("token")) < total ? (
+                          <span className="text-xs text-muted-foreground opacity-70">
+                            (not enough)
+                          </span>
+                        ) : null}
                         <Button
-                          type="button"
                           variant="outline"
                           size="sm"
                           className="text-xs p-0 h-min px-2"
-                          onClick={() => approveAllowanceAsync(0n)}
+                          type="button"
+                          onClick={() => refreshSPLTokenBalance()}
                         >
-                          Revoke
+                          Refresh
                         </Button>
-                      ) : null}
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="text-xs p-0 h-min px-2"
-                        type="button"
-                        onClick={() => refetchAllowance()}
-                      >
-                        Refresh
-                      </Button>
-                      {isApprovePending || isAllowanceLoading ? (
-                        <span className="text-[13px] text-muted-foreground">
-                          ...
-                        </span>
-                      ) : null}
-                    </span>
+                      </span>
+                    ) : (
+                      <span className="whitespace-nowrap flex gap-2 items-center">
+                        <span className="font-medium">Allowance</span>:{" "}
+                        {formattedAllowance} {balance?.symbol}{" "}
+                        {allowance && allowance < total ? (
+                          <span className="text-xs text-muted-foreground opacity-70">
+                            (not enough)
+                          </span>
+                        ) : null}
+                        {allowance && allowance > 0 ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="text-xs p-0 h-min px-2"
+                            onClick={() => approveAllowanceAsync(0n)}
+                          >
+                            Revoke
+                          </Button>
+                        ) : null}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="text-xs p-0 h-min px-2"
+                          type="button"
+                          onClick={() => refetchAllowance()}
+                        >
+                          Refresh
+                        </Button>
+                        {isApprovePending || isAllowanceLoading ? (
+                          <span className="text-[13px] text-muted-foreground">
+                            ...
+                          </span>
+                        ) : null}
+                      </span>
+                    )}
                   </div>
                 )}
               </div>
@@ -576,12 +352,13 @@ export default function App() {
                               )
                             : disperseTokenAsync();
                         }}
-                        disabled={false}
-                        //   // isApprovePending ||
-                        //   // isAllowanceLoading ||
-                        //   // !token ||
-                        //   // allowance === undefined || !connected
-                        // }
+                        disabled={
+                          (isApprovePending ||
+                          isAllowanceLoading ||
+                          !token ||
+                          allowance === undefined 
+                          ) && (!connected || total === 0n ||  splBalance(token) < total )
+                        }
                       >
                         Disperse
                       </Button>

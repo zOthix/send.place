@@ -19,7 +19,7 @@ export default function WrappedApp() {
   );
   return (
     <ConnectionProvider endpoint={clusterApiUrl("devnet")}>
-      <WalletProvider wallets={wallets} autoConnect={false}>
+      <WalletProvider wallets={wallets}>
         <WalletModalProvider>
           <Web3Provider>
             <App />

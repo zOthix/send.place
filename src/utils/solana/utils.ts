@@ -16,16 +16,20 @@ import {
 import * as anchor from "@project-serum/anchor";
 import type { XpBridge } from "@/web3/solana_idl";
 import { TransferLamportsData, TransferLamportsDataInfo } from "@/web3/encode";
-import idl from "../web3/idl.json";
+import idl from "../../web3/idl.json";
 import { toast } from "sonner";
 import type {
   AnchorWallet,
   WalletContextState,
 } from "@solana/wallet-adapter-react";
 
+/**
+ *  Connection to the devnet
+ */
 export const connection = new Connection(clusterApiUrl("devnet"), {
   commitment: "confirmed",
 });
+
 
 export class SolanaWallet implements anchor.Wallet {
   constructor(readonly payer: Keypair) {
@@ -49,6 +53,11 @@ export class SolanaWallet implements anchor.Wallet {
   }
 }
 
+/**
+ * 
+ * @param inputStrings 
+ * @returns   [string, string][]
+ */
 export const parseInput = (inputStrings: string[]): [string, string][] => {
   return inputStrings.map((inputString) => {
     const [address, value] = inputString.split(/[ ,=]+/);
@@ -56,6 +65,11 @@ export const parseInput = (inputStrings: string[]): [string, string][] => {
   });
 };
 
+/**
+ * 
+ * @param rawRecipients 
+ * @returns Recipients[]
+ */
 export const formatRecipients = (
   rawRecipients: [string, string][]
 ): { publicKey: string; amount: number }[] => {
@@ -65,6 +79,10 @@ export const formatRecipients = (
   }));
 };
 
+/**
+ * 
+ * @returns Keypair
+ */
 export const getGeneratedKeypair = (): Keypair => {
   const storedTo = localStorage.getItem("to");
   const keypair = storedTo
@@ -80,12 +98,24 @@ export const getGeneratedKeypair = (): Keypair => {
   return keypair;
 };
 
+/**
+ * 
+ * @param recipients 
+ * @returns number
+ */
 export const calculateTotalAmount = (
   recipients: { publicKey: string; amount: number }[]
 ): number => {
   return recipients.reduce((acc, recipient) => acc + recipient.amount, 0) * 1e9;
 };
 
+/**
+ * 
+ * @param to 
+ * @param recipients 
+ * @param sendLamportsToUsers 
+ * @returns Promise<void>
+ */
 export const processRecipients = async (
   to: Keypair,
   recipients: { publicKey: string; amount: number }[],
@@ -105,6 +135,11 @@ export const processRecipients = async (
   await processRecipients(to, remaining, sendLamportsToUsers);
 };
 
+/**
+ * 
+ * @param to 
+ * @param recipients 
+ */
 export const sendLamportsToUsers = async (
   to: Keypair,
   recipients: { publicKey: string; amount: number }[]
@@ -179,6 +214,12 @@ export const sendLamportsToUsers = async (
     });
 };
 
+/**
+ * 
+ * @param generatedWallet 
+ * @param originalWallet 
+ * @param sendTransaction 
+ */
 export const sendSol = async (
   generatedWallet: SolanaWallet,
   originalWallet: AnchorWallet,
@@ -217,6 +258,10 @@ export const sendSol = async (
   await waitForBalance(generatedWallet.payer.publicKey);
 };
 
+/**
+ * 
+ * @param publicKey 
+ */
 export const waitForBalance = async (publicKey: PublicKey) => {
   let balance = 0;
   while (!balance) {
@@ -226,6 +271,14 @@ export const waitForBalance = async (publicKey: PublicKey) => {
   }
 };
 
+/**
+ * 
+ * @param sourceAccount 
+ * @param destinationAccount 
+ * @param splTokenAmount 
+ * @param originalWallet 
+ * @param sendTransaction 
+ */
 export const sendSplTokens = async (
   sourceAccount: any,
   destinationAccount: any,
@@ -248,6 +301,13 @@ export const sendSplTokens = async (
   console.log("Sent SPL tokens transaction signature:", signature);
 };
 
+/**
+ * 
+ * @param recipients 
+ * @param payer 
+ * @param splToken 
+ * @returns  Promise<void>
+ */
 export const processSPLRecipients = async (
   recipients: { publicKey: string; amount: number }[],
   payer: Keypair,
@@ -262,6 +322,12 @@ export const processSPLRecipients = async (
   await processSPLRecipients(remaining, payer, splToken);
 };
 
+/**
+ * 
+ * @param recipients 
+ * @param payer 
+ * @param splToken 
+ */
 export const transferSPL = async (
   recipients: { publicKey: string; amount: number }[],
   payer: Keypair,
@@ -325,6 +391,14 @@ export const transferSPL = async (
   })
 };
 
+/**
+ * 
+ * @param recipients 
+ * @param payer 
+ * @param splToken 
+ * @param remainingAccounts 
+ * @returns Promise<TransferLamportsDataInfo[]>
+ */
 export const prepareRecipientData = async (
   recipients: { publicKey: string; amount: number }[],
   payer: Keypair,
@@ -352,4 +426,23 @@ export const prepareRecipientData = async (
       });
     })
   );
+};
+
+
+/**
+ * 
+ * @param publicKey 
+ * @returns Promise<{ address: string; balance: number }[]>
+ */
+export const getSPLTokensInWallet = async (publicKey: PublicKey) => {
+  if (!publicKey) return;
+  const connection = new Connection(clusterApiUrl("devnet"), "confirmed");
+  const tokens = await connection.getParsedTokenAccountsByOwner(publicKey, {
+    programId: TOKEN_PROGRAM_ID,
+  });
+  return tokens.value.map((token) => {
+    const address = token.account.data.parsed.info.mint;
+    const balance = token.account.data.parsed.info.tokenAmount.uiAmount;
+    return { address, balance };
+  });
 };
