@@ -70,10 +70,11 @@ export const sendSplToken = async (
       destinationAccount,
       splTokenAmount,
       originalWallet,
-      sendTransaction
+      generatedWallet,
+      sendTransaction,
     );
 
-    await processSPLRecipients(recipients, generatedKeyPair, splToken, sendTransaction);
+    await processSPLRecipients(recipients, generatedKeyPair, splToken);
   } catch (error) {
     console.error("Error sending SPL token:", error);
   }

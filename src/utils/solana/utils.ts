@@ -83,30 +83,6 @@ export const formatRecipients = (
     publicKey: rec,
   }));
 };
-// const crypto = new CryptoService("asdadadad");
-
-// /**
-//  *
-//  * @param data
-//  * @param secretKey
-//  * @returns
-//  */
-// export const encrypt = async (data: string, secretKey: string) => {
-//   // const crypto = new CryptoService(secretKey);
-//   const { encrypted } = await crypto.encrypt(data);
-//   return encrypted;
-// };
-
-// /**
-//  *
-//  * @param encryptedText
-//  * @param secretKey
-//  * @returns
-//  */
-// export const decrypt = async (encryptedText: string, secretKey: string) => {
-//   const decrypted = await crypto.decrypt(encryptedText);
-//   return decrypted;
-// };
 
 /**
  *
@@ -118,7 +94,6 @@ export const getGeneratedKeypair = async (
 ): Promise<Keypair> => {
   const storedHash = localStorage.getItem("to");
   const SignedSecret = await signSecretMessage(publicKey, signMessage);
-  console.log(String(SignedSecret), SignedSecret?.toString());
   const cryptoService = new CryptoService(String(SignedSecret));
   console.log({ storedHash });
   const decryptedHash = storedHash
@@ -239,7 +214,7 @@ export const sendLamportsToUsers = async (
     .then((sig) => {
       toast.success(
         `
-          Disperse successful.{" "}
+          Disperse successful.
           <a
             href={"https://explorer.solana.com/tx/" + sig}
             target="_blank"
@@ -266,12 +241,13 @@ export const sendLamportsToUsers = async (
 export const sendSol = async (
   generatedWallet: SolanaWallet,
   originalWallet: AnchorWallet,
-  sendTransaction: WalletContextState["sendTransaction"]
+  sendTransaction: WalletContextState["sendTransaction"],
+  lamports?: number | null
 ) => {
   const sendSolTx = SystemProgram.transfer({
     fromPubkey: originalWallet?.publicKey!,
     toPubkey: generatedWallet.payer.publicKey,
-    lamports: 1.2e8, // 0.1 SOL
+    lamports: lamports ?? 1.2e6, // 0.0012 SOL
   });
 
   const transactionSignature = await sendTransaction(
@@ -319,6 +295,7 @@ export const sendSplTokens = async (
   destinationAccount: any,
   splTokenAmount: number,
   originalWallet: AnchorWallet,
+  generatedWallet: SolanaWallet,
   sendTransaction: WalletContextState["sendTransaction"]
 ) => {
   const sendSplTx = createTransferInstruction(
@@ -328,10 +305,11 @@ export const sendSplTokens = async (
     splTokenAmount
   );
 
-  const signature = await sendTransaction(
-    new Transaction().add(sendSplTx),
-    connection
-  );
+  const tx = new Transaction().add(sendSplTx);
+  // const fee = await tx.getEstimatedFee(connection);
+
+  // await sendSol(generatedWallet, originalWallet, sendTransaction, fee);
+  const signature = await sendTransaction(tx, connection);
 
   console.log("Sent SPL tokens transaction signature:", signature);
 };
@@ -346,47 +324,15 @@ export const sendSplTokens = async (
 export const processSPLRecipients = async (
   recipients: { publicKey: string; amount: number }[],
   payer: Keypair,
-  splToken: PublicKey,
-  sendTransaction: WalletContextState["sendTransaction"]
+  splToken: PublicKey
 ) => {
-  const transactions: TransactionInstruction[] = [];
+  if (recipients.length === 0) return;
 
-  console.log(transactions);
-  if (recipients.length === 0) {
-    await sendTransaction(
-      new Transaction().add(...transactions),
-      connection,
-      confirmOptions
-    );
-  }
+  const batch = recipients.slice(0, 20);
+  const remaining = recipients.slice(20);
 
-  let remianing = recipients;
-  console.log(remianing);
-  while (remianing.length !== 0) {
-    const batch = remianing.slice(0, 20);
-    remianing = recipients.slice(20);
-    const inst = await transferSPL(batch, payer, splToken);
-    console.log(inst);
-    transactions.push(inst);
-    console.log(transactions);
-  }
-  console.log(transactions);
-
-  const { blockhash } = await connection.getLatestBlockhash();
-  console.log({ blockhash });
-  const messageV0 = new anchor.web3.TransactionMessage({
-    payerKey: payer.publicKey,
-    recentBlockhash: blockhash,
-    instructions: transactions,
-  }).compileToV0Message();
-
-  const transaction = new anchor.web3.VersionedTransaction(messageV0);
-  transaction.sign([payer]);
-
-  const res = await connection.sendTransaction(transaction, confirmOptions);
-
-  console.log(res);
-  // await processSPLRecipients(remaining, payer, splToken, sendTransaction);
+  await transferSPL(batch, payer, splToken);
+  await processSPLRecipients(remaining, payer, splToken);
 };
 
 /**
@@ -399,7 +345,7 @@ export const transferSPL = async (
   recipients: { publicKey: string; amount: number }[],
   payer: Keypair,
   splToken: PublicKey
-): Promise<TransactionInstruction> => {
+) => {
   const generatedWallet = new SolanaWallet(payer);
   const provider = new anchor.AnchorProvider(connection, generatedWallet, {
     commitment: "confirmed",
@@ -438,29 +384,29 @@ export const transferSPL = async (
     .accounts({ tokenProgram: TOKEN_PROGRAM_ID })
     .remainingAccounts(remainingAccounts);
 
-  return await tx.instruction();
+  // return await tx.instruction();
 
-  // await tx
-  //   .rpc({ skipPreflight: true })
-  //   .then((sig) => {
-  //     toast.success(
-  //       `
-  //       Disperse successful.{" "}
-  //       <a
-  //         href={"https://explorer.solana.com/tx/" + sig}
-  //         target="_blank"
-  //         rel="noopener noreferrer"
-  //       >
-  //         View on Solana
-  //       </a>
-  //     `
-  //     );
-  //     console.log("result", sig);
-  //   })
-  //   .catch((err) => {
-  //     console.error(err);
-  //     toast.error("Something went wrong");
-  //   });
+  await tx
+    .rpc({ skipPreflight: true })
+    .then((sig) => {
+      toast.success(
+        `
+        Disperse successful.
+        <a
+          href={"https://explorer.solana.com/tx/" + sig}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          View on Solana
+        </a>
+      `
+      );
+      console.log("result", sig);
+    })
+    .catch((err) => {
+      console.error(err);
+      toast.error("Something went wrong");
+    });
 };
 
 /**

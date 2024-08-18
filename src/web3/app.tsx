@@ -41,9 +41,8 @@ import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 export default function App() {
   const account = useAccount();
   const orignalWallet = useAnchorWallet();
-  const { sendTransaction, publicKey, connecting, connected, signMessage } =
+  const { sendTransaction, publicKey, connecting, connected, signMessage,select } =
     useWallet();
-  const { open } = useWeb3Modal();
   const address = account.address ? shortenAddress(account.address) : "";
   const chainName = account.chain?.name ? account.chain.name : "";
   const tokens = (account.chain as any)?.tokens;
@@ -151,20 +150,20 @@ export default function App() {
             <span className="font-bold sm:inline-block">{siteConfig.name}</span>
           </a>
           <div className="flex items-center space-x-4">
-            {/* {connected || connecting ? ( */}
-              <WalletMultiButton
-                style={{
-                  background: "#1e1e1e",
-                  borderRadius: "9999px",
-                  padding: "1rem",
-                  height: "2.5rem",
-                }}
-              />
-            {/* // ) : account.status === "connected" ? ( */}
-              <w3m-connect-button />
-            {/* // ) : ( */}
-              <ChooseWallet />
-            {/* // )} */}
+            {connected || connecting ? (
+            <WalletMultiButton
+              style={{
+                background: "#1e1e1e",
+                borderRadius: "9999px",
+                padding: "1rem",
+                height: "2.5rem",
+              }}
+            />
+            ) : account.status === "connected" ? (
+            <w3m-connect-button />
+            ) : (
+            <ChooseWallet />
+            )}
           </div>
         </div>
       </header>
@@ -281,7 +280,7 @@ export default function App() {
                         <span className="font-medium">SPL Token Balance: </span>
                         {splBalance(form.getValues("token"))}
                         {splBalance(form.getValues("token")) &&
-                        splBalance(form.getValues("token")) < total ? (
+                        splBalance(form.getValues("token")) > total ? (
                           <span className="text-xs text-muted-foreground opacity-70">
                             (not enough)
                           </span>
@@ -370,14 +369,14 @@ export default function App() {
                             : disperseTokenAsync();
                         }}
                         disabled={
-                          // (isApprovePending ||
-                          //   isAllowanceLoading ||
-                          //   !token ||
-                          //   allowance === undefined) &&
-                          // (!connected ||
-                          //   total === 0n ||
-                          //   splBalance(token) < total)
-                          false
+                          (isApprovePending ||
+                            isAllowanceLoading ||
+                            !token ||
+                            allowance === undefined) &&
+                          (!connected || total === 0n)
+                          //  ||
+                          // splBalance(token) < total
+                          // false
                         }
                       >
                         Disperse
@@ -441,9 +440,7 @@ export default function App() {
               )}
               {!isConnected && (
                 <div className="flex gap-2 items-center">
-                  <Button type="submit" onClick={() => open()}>
-                    Connect Wallet
-                  </Button>
+                   <ChooseWallet varient={'secondary'} />
                 </div>
               )}
             </form>
